@@ -95,9 +95,12 @@ jobs:
           fi
           echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
 
-          # Cari MLmodel file dari local mlruns
-          MLMODEL_FILE=$(find . -path "*/mlruns/*/artifacts/model/MLmodel" \
-            -not -path "*/tmp/*" 2>/dev/null | head -1)
+          # Cari MLmodel file dari local mlruns hasil re-train terbaru
+          MLMODEL_FILE=$(find "${{ github.workspace }}/mlruns" -name "MLmodel" 2>/dev/null | head -1)
+          if [ -z "$MLMODEL_FILE" ]; then
+            # Fallback ke pencarian umum jika tidak ditemukan di root
+            MLMODEL_FILE=$(find . -path "*/mlruns/*/artifacts/model/MLmodel" -not -path "*/tmp/*" 2>/dev/null | head -1)
+          fi
 
           echo "Found MLmodel at: $MLMODEL_FILE"
 
@@ -107,15 +110,15 @@ jobs:
 
             # Patch Python version to 3.12.7 to prevent EOL failure and match user requirements
             if [ -f "$MODEL_PATH/MLmodel" ]; then
-              sed -i 's/python_version: 3\.[0-9]\+\.[0-9]\+/python_version: 3.12.7/g' "$MODEL_PATH/MLmodel"
+              sed -i 's/python_version: 3\.[0-9]*/python_version: 3.12.7/g' "$MODEL_PATH/MLmodel"
               echo "  Patched MLmodel"
             fi
             if [ -f "$MODEL_PATH/python_env.yaml" ]; then
-              sed -i 's/python: 3\.[0-9]\+\.[0-9]\+/python: 3.12.7/g' "$MODEL_PATH/python_env.yaml"
+              sed -i 's/python: 3\.[0-9]*/python: 3.12.7/g' "$MODEL_PATH/python_env.yaml"
               echo "  Patched python_env.yaml"
             fi
             if [ -f "$MODEL_PATH/conda.yaml" ]; then
-              sed -i 's/python=3\.[0-9]\+\.[0-9]\+/python=3.12.7/g' "$MODEL_PATH/conda.yaml"
+              sed -i 's/python=3\.[0-9]*/python=3.12.7/g' "$MODEL_PATH/conda.yaml"
               echo "  Patched conda.yaml"
             fi
 
@@ -226,9 +229,12 @@ jobs:
           fi
 
           git add MLProject/model_artifacts/ || true
-          git diff-index --quiet HEAD || \
+          if ! git diff --cached --quiet; then
             git commit -m "ci: update trained model artifacts [skip ci]"
-          git push
+            git push
+          else
+            echo "No artifact changes to commit."
+          fi
 
       - name: Upload artifacts to Google Shared Drive
         if: false  # TODO: aktifkan setelah Shared Drive dikonfigurasi
