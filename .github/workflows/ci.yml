@@ -110,15 +110,15 @@ jobs:
 
             # Patch Python version to 3.12.7 to prevent EOL failure and match user requirements
             if [ -f "$MODEL_PATH/MLmodel" ]; then
-              sed -i 's/python_version: 3\.[0-9]*/python_version: 3.12.7/g' "$MODEL_PATH/MLmodel"
+              sed -i 's/python_version: 3\.[0-9.]*/python_version: 3.12.7/g' "$MODEL_PATH/MLmodel"
               echo "  Patched MLmodel"
             fi
             if [ -f "$MODEL_PATH/python_env.yaml" ]; then
-              sed -i 's/python: 3\.[0-9]*/python: 3.12.7/g' "$MODEL_PATH/python_env.yaml"
+              sed -i 's/python: 3\.[0-9.]*/python: 3.12.7/g' "$MODEL_PATH/python_env.yaml"
               echo "  Patched python_env.yaml"
             fi
             if [ -f "$MODEL_PATH/conda.yaml" ]; then
-              sed -i 's/python=3\.[0-9]*/python=3.12.7/g' "$MODEL_PATH/conda.yaml"
+              sed -i 's/python=3\.[0-9.]*/python=3.12.7/g' "$MODEL_PATH/conda.yaml"
               echo "  Patched conda.yaml"
             fi
 
