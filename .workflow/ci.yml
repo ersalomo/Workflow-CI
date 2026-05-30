@@ -19,6 +19,8 @@ on:
 jobs:
   train:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -125,9 +127,14 @@ jobs:
 
       - name: Commit trained model artifacts to repository
         if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Gunakan GITHUB_TOKEN agar push diizinkan
+          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}
 
           # Copy artifacts to a tracked folder
           mkdir -p MLProject/model_artifacts
@@ -135,7 +142,7 @@ jobs:
             cp -r MLProject/artifacts/. MLProject/model_artifacts/ 2>/dev/null || true
           fi
 
-          # Copy latest model file if exists
+          # Copy latest model plots if exists
           MLMODEL_FILE=$(find . -path "*/mlruns/*/artifacts/model/MLmodel" \
             -not -path "*/tmp/*" 2>/dev/null | head -1)
           if [ -n "$MLMODEL_FILE" ]; then
