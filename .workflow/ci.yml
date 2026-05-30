@@ -113,7 +113,7 @@ jobs:
             echo "No MLflow model found, skipping Docker build."
           fi
 
-      - name: Upload MLflow artifacts
+      - name: Upload MLflow artifacts (GitHub Actions)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -122,3 +122,77 @@ jobs:
             MLProject/mlruns/
             MLProject/artifacts/
           retention-days: 30
+
+      - name: Commit trained model artifacts to repository
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Copy artifacts to a tracked folder
+          mkdir -p MLProject/model_artifacts
+          if [ -d "MLProject/artifacts" ]; then
+            cp -r MLProject/artifacts/. MLProject/model_artifacts/ 2>/dev/null || true
+          fi
+
+          # Copy latest model file if exists
+          MLMODEL_FILE=$(find . -path "*/mlruns/*/artifacts/model/MLmodel" \
+            -not -path "*/tmp/*" 2>/dev/null | head -1)
+          if [ -n "$MLMODEL_FILE" ]; then
+            MODEL_DIR=$(dirname "$MLMODEL_FILE")
+            cp "$MODEL_DIR"/../*.png MLProject/model_artifacts/ 2>/dev/null || true
+          fi
+
+          git add MLProject/model_artifacts/ || true
+          git diff-index --quiet HEAD || \
+            git commit -m "ci: update trained model artifacts [skip ci]"
+          git push
+
+      - name: Upload artifacts to Google Drive
+        if: always()
+        env:
+          GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+        run: |
+          if [ -z "$GDRIVE_CREDENTIALS" ] || [ -z "$GDRIVE_FOLDER_ID" ]; then
+            echo "Google Drive secrets not set, skipping upload."
+            exit 0
+          fi
+
+          pip install google-auth google-api-python-client 2>/dev/null
+
+          python - <<'EOF'
+          import os, json, zipfile, tempfile
+          from googleapiclient.discovery import build
+          from googleapiclient.http import MediaFileUpload
+          from google.oauth2 import service_account
+
+          # Load credentials from secret
+          creds_json = json.loads(os.environ["GDRIVE_CREDENTIALS"])
+          folder_id  = os.environ["GDRIVE_FOLDER_ID"]
+          creds = service_account.Credentials.from_service_account_info(
+              creds_json,
+              scopes=["https://www.googleapis.com/auth/drive.file"]
+          )
+          service = build("drive", "v3", credentials=creds)
+
+          # Zip artifacts
+          zip_path = "/tmp/mlflow_artifacts.zip"
+          with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+              for root, dirs, files in os.walk("MLProject/artifacts"):
+                  for file in files:
+                      filepath = os.path.join(root, file)
+                      zf.write(filepath, os.path.relpath(filepath, "MLProject"))
+              for root, dirs, files in os.walk("MLProject/mlruns"):
+                  for file in files:
+                      filepath = os.path.join(root, file)
+                      zf.write(filepath, os.path.relpath(filepath, "MLProject"))
+
+          # Upload to Google Drive
+          run_number = os.environ.get("GITHUB_RUN_NUMBER", "0")
+          file_name  = f"mlflow_artifacts_run_{run_number}.zip"
+          media = MediaFileUpload(zip_path, mimetype="application/zip", resumable=True)
+          file_metadata = {"name": file_name, "parents": [folder_id]}
+          uploaded = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+          print(f"Uploaded to Google Drive: {file_name} (id={uploaded.get('id')})")
+          EOF
