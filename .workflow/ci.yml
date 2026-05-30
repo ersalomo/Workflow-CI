@@ -104,6 +104,23 @@ jobs:
           if [ -n "$MLMODEL_FILE" ]; then
             MODEL_PATH=$(dirname "$MLMODEL_FILE")
             echo "Model path: $MODEL_PATH"
+
+            # Patch Python version 3.9.* to 3.10.13 to prevent get-pip.py EOL failure in MLflow's default build-docker
+            python3 -c "
+import os, re
+path = '$MODEL_PATH'
+print(f'Patching model Python version in: {path}...')
+for fn in ['MLmodel', 'conda.yaml', 'python_env.yaml']:
+    fp = os.path.join(path, fn)
+    if os.path.exists(fp):
+        with open(fp, 'r') as f:
+            content = f.read()
+        new_content = re.sub(r'3\.9\.[0-9]+', '3.10.13', content)
+        with open(fp, 'w') as f:
+            f.write(new_content)
+        print(f'  Patched {fn}')
+"
+
             mlflow models build-docker \
               -m "$MODEL_PATH" \
               -n "$DOCKERHUB_USERNAME/wine-quality-mlproject:latest"
