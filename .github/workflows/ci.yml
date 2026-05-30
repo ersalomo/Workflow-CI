@@ -156,7 +156,7 @@ jobs:
           git push
 
       - name: Upload artifacts to Google Shared Drive
-        if: always()
+        if: false  # TODO: aktifkan setelah Shared Drive dikonfigurasi
         env:
           GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
