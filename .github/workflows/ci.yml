@@ -95,14 +95,15 @@ jobs:
           echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
 
           # Find the newest MLmodel file inside any mlruns directory
-          MODEL_PATH=$(find . -path "*/mlruns/*/artifacts/model/MLmodel" \
-            -not -path "*/tmp/*" \
-            -printf '%T@ %p\n' 2>/dev/null \
-            | sort -rn | head -1 | awk '{print $2}' | xargs dirname)
+          MLMODEL_FILE=$(find . -path "*/mlruns/*/artifacts/model/MLmodel" \
+            -not -path "*/tmp/*" 2>/dev/null \
+            | head -1)
 
-          echo "Latest model path: $MODEL_PATH"
+          echo "Found MLmodel at: $MLMODEL_FILE"
 
-          if [ -n "$MODEL_PATH" ] && [ -d "$MODEL_PATH" ]; then
+          if [ -n "$MLMODEL_FILE" ]; then
+            MODEL_PATH=$(dirname "$MLMODEL_FILE")
+            echo "Model path: $MODEL_PATH"
             mlflow models build-docker \
               -m "$MODEL_PATH" \
               -n "$DOCKERHUB_USERNAME/wine-quality-mlproject:latest"
