@@ -155,33 +155,65 @@ jobs:
             git commit -m "ci: update trained model artifacts [skip ci]"
           git push
 
-      - name: Upload artifacts to GitHub Releases
+      - name: Upload artifacts to Google Shared Drive
         if: always()
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
         run: |
-          # Buat zip dari semua artefak training
-          zip_name="mlflow_artifacts_run_${{ github.run_number }}.zip"
-          zip -r "$zip_name" MLProject/artifacts/ MLProject/mlruns/ 2>/dev/null || true
-
-          if [ ! -f "$zip_name" ]; then
-            echo "No artifacts to upload, skipping GitHub Release."
+          if [ -z "$GDRIVE_CREDENTIALS" ] || [ -z "$GDRIVE_FOLDER_ID" ]; then
+            echo "Google Drive secrets not set, skipping upload."
             exit 0
           fi
 
-          # Buat tag unik untuk setiap run
-          TAG="artifacts-run-${{ github.run_number }}"
-          RELEASE_NAME="Training Artifacts - Run #${{ github.run_number }}"
-          RELEASE_NOTES="Automated MLflow training artifacts from CI run #${{ github.run_number }}.
-          Includes: model plots, mlruns logs, and trained model artifacts."
+          pip install google-auth google-api-python-client 2>/dev/null
 
-          # Buat release dan upload zip sebagai asset
-          gh release create "$TAG" "$zip_name" \
-            --title "$RELEASE_NAME" \
-            --notes "$RELEASE_NOTES" \
-            --repo "${{ github.repository }}" || \
-          gh release upload "$TAG" "$zip_name" \
-            --repo "${{ github.repository }}" \
-            --clobber
+          python - <<'EOF'
+          import os, json, zipfile
+          from googleapiclient.discovery import build
+          from googleapiclient.http import MediaFileUpload
+          from google.oauth2 import service_account
 
-          echo "Artifacts uploaded to GitHub Release: $TAG"
+          # Load credentials
+          creds_json  = json.loads(os.environ["GDRIVE_CREDENTIALS"])
+          folder_id   = os.environ["GDRIVE_FOLDER_ID"]
+          run_number  = os.environ.get("GITHUB_RUN_NUMBER", "0")
+
+          creds = service_account.Credentials.from_service_account_info(
+              creds_json,
+              scopes=["https://www.googleapis.com/auth/drive"]
+          )
+          service = build("drive", "v3", credentials=creds)
+
+          # Zip artifacts
+          zip_path = f"/tmp/mlflow_artifacts_run_{run_number}.zip"
+          added = 0
+          with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+              for folder in ["MLProject/artifacts", "MLProject/mlruns"]:
+                  if os.path.isdir(folder):
+                      for root, dirs, files in os.walk(folder):
+                          for file in files:
+                              fp = os.path.join(root, file)
+                              zf.write(fp, os.path.relpath(fp, "MLProject"))
+                              added += 1
+
+          if added == 0:
+              print("No artifact files found, skipping upload.")
+              exit(0)
+
+          print(f"Zipped {added} files -> {zip_path}")
+
+          # Upload ke Shared Drive (wajib pakai supportsAllDrives=True)
+          file_name     = f"mlflow_artifacts_run_{run_number}.zip"
+          media         = MediaFileUpload(zip_path, mimetype="application/zip", resumable=True)
+          file_metadata = {"name": file_name, "parents": [folder_id]}
+
+          uploaded = service.files().create(
+              body=file_metadata,
+              media_body=media,
+              fields="id, name",
+              supportsAllDrives=True   # <-- wajib untuk Shared Drive
+          ).execute()
+
+          print(f"Uploaded to Shared Drive: {file_name} (id={uploaded.get('id')})")
+          EOF
