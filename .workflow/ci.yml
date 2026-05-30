@@ -1,0 +1,107 @@
+name: CI – Retrain Model with MLflow Projects
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      n_estimators:
+        description: "Number of trees"
+        required: false
+        default: "120"
+      max_depth:
+        description: "Max tree depth"
+        required: false
+        default: "6"
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: .
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('Membangun_model/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install mlflow>=2.0.0 scikit-learn pandas numpy matplotlib joblib
+
+      - name: Validate preprocessed dataset exists
+        run: |
+          if [ ! -f "Workflow-CI/MLProject/wine_preprocessed.csv" ]; then
+            echo "wine_preprocessed.csv not found! Generating from raw data..."
+            pip install scikit-learn pandas numpy
+            cd Eksperimen_SML_siswa/preprocessing
+            python automate_siswa.py ../wine_quality_raw.csv ../../Workflow-CI/MLProject/wine_preprocessed.csv
+          else
+            echo "wine_preprocessed.csv found ($(wc -l < Workflow-CI/MLProject/wine_preprocessed.csv) rows)"
+          fi
+
+      - name: Run MLflow Project (re-train)
+        env:
+          # MLFLOW_TRACKING_URI: "local"
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.DAGSHUB_TOKEN }}
+        run: |
+          N_EST="${{ github.event.inputs.n_estimators || '120' }}"
+          MAX_D="${{ github.event.inputs.max_depth || '6' }}"
+          echo "Training with n_estimators=$N_EST, max_depth=$MAX_D"
+          mlflow run Workflow-CI/MLProject \
+            -P n_estimators=$N_EST \
+            -P max_depth=$MAX_D \
+            --env-manager=local
+
+
+      - name: Build and Push Docker Image using MLflow
+        if: github.ref == 'refs/heads/main'
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "DockerHub secrets not set, skipping build and push."
+            exit 0
+          fi
+          echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+          
+          # Find the latest run ID from local mlruns
+          RUN_ID=$(find mlruns/0 -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p
+' | sort -n | tail -1 | awk '{print $2}' | cut -d'/' -f3)
+          echo "Latest Run ID: $RUN_ID"
+          
+          if [ ! -z "$RUN_ID" ]; then
+            mlflow models build-docker -m "mlruns/0/$RUN_ID/artifacts/model" -n "$DOCKERHUB_USERNAME/wine-quality-mlproject:latest"
+            docker push "$DOCKERHUB_USERNAME/wine-quality-mlproject:latest"
+          else
+            echo "No MLflow run found!"
+          fi
+
+      - name: Upload MLflow artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlflow-training-artifacts
+          path: |
+            mlruns/
+            Workflow-CI/MLProject/artifacts/
+          retention-days: 30

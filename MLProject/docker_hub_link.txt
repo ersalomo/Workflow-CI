@@ -1,0 +1,28 @@
+Docker Hub Image Link:
+https://hub.docker.com/r/ersalomo/wine-quality-mlproject
+
+=== Cara Build dan Push Docker Image ===
+
+# Opsi 1: Build manual dengan Docker
+cd "Monitoring dan Logging"
+docker build -t ersalomo/wine-quality-mlproject:latest .
+docker push ersalomo/wine-quality-mlproject:latest
+
+# Opsi 2: Build dengan MLflow (setelah training)
+mlflow models build-docker \
+  -m "runs:/<RUN_ID>/model" \
+  -n "ersalomo/wine-quality-mlproject"
+docker push ersalomo/wine-quality-mlproject:latest
+
+# Opsi 3: Jalankan dari Docker Hub
+docker pull ersalomo/wine-quality-mlproject:latest
+docker run -p 8000:8000 ersalomo/wine-quality-mlproject:latest
+
+=== Jalankan Stack Lengkap dengan Docker Compose ===
+cd "Monitoring dan Logging"
+docker-compose up -d
+
+Services:
+  - ML Serving : http://localhost:8000
+  - Prometheus  : http://localhost:9090
+  - Grafana     : http://localhost:3000
