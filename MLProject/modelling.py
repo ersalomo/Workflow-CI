@@ -28,10 +28,12 @@ def train_model(n_estimators: int, max_depth: int):
     """Train RandomForest dengan hyperparameters dari CLI dan log ke MLflow."""
     print(f"[MLProject] Training with n_estimators={n_estimators}, max_depth={max_depth}")
 
-    # Load preprocessed data (dari direktori yang sama dengan MLProject)
-    data_path = os.path.join(os.path.dirname(__file__), "wine_preprocessed.csv")
+    # Load preprocessed data
+    data_path = os.path.join(os.path.dirname(__file__), "namadataset_preprocessing", "wine_preprocessed.csv")
     if not os.path.exists(data_path):
-        raise FileNotFoundError(f"Preprocessed dataset not found at: {data_path}")
+        data_path = os.path.join(os.path.dirname(__file__), "wine_preprocessed.csv")
+        if not os.path.exists(data_path):
+            raise FileNotFoundError(f"Preprocessed dataset not found at: {data_path}")
 
     df = pd.read_csv(data_path)
     X  = df.drop(columns=['quality'])
