@@ -44,6 +44,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install mlflow==2.19.0 scikit-learn pandas numpy matplotlib joblib
 
+      - name: Patch MLflow library for Python 3.9 get-pip compatibility
+        run: |
+          PYTHON_DOCKER_UTILS=$(python3 -c "import mlflow.models.docker_utils as d; print(d.__file__)")
+          echo "Patching MLflow library file at: $PYTHON_DOCKER_UTILS"
+          sed -i 's|https://bootstrap.pypa.io/get-pip.py|https://bootstrap.pypa.io/pip/3.9/get-pip.py|g' "$PYTHON_DOCKER_UTILS"
+
       - name: Validate preprocessed dataset exists
         run: |
           mkdir -p MLProject/namadataset_preprocessing
