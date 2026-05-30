@@ -105,19 +105,22 @@ jobs:
             MODEL_PATH=$(dirname "$MLMODEL_FILE")
             echo "Model path: $MODEL_PATH"
 
-            # Patch Python version 3.9.* to 3.10.13 to prevent get-pip.py EOL failure in MLflow's default build-docker
+            # Patch Python version to 3.12.7 to prevent EOL failure and match user requirements
             python3 -c "
 import os, re
 path = '$MODEL_PATH'
-print(f'Patching model Python version in: {path}...')
+print(f'Patching model Python version in: {path} to 3.12.7...')
 for fn in ['MLmodel', 'conda.yaml', 'python_env.yaml']:
     fp = os.path.join(path, fn)
     if os.path.exists(fp):
         with open(fp, 'r') as f:
             content = f.read()
-        new_content = re.sub(r'3\.9\.[0-9]+', '3.10.13', content)
+        # Patch precisely python_version, python: and python= versions
+        content = re.sub(r'python_version:\s*3\.[0-9]+\.[0-9]+', 'python_version: 3.12.7', content)
+        content = re.sub(r'python:\s*3\.[0-9]+\.[0-9]+', 'python: 3.12.7', content)
+        content = re.sub(r'python=3\.[0-9]+\.[0-9]+', 'python=3.12.7', content)
         with open(fp, 'w') as f:
-            f.write(new_content)
+            f.write(content)
         print(f'  Patched {fn}')
 "
 
