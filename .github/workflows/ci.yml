@@ -72,8 +72,8 @@ jobs:
           MAX_D="${{ github.event.inputs.max_depth || '6' }}"
           echo "Training with n_estimators=$N_EST, max_depth=$MAX_D"
 
-          # Gunakan local tracking agar model tersimpan di runner untuk Docker build
-          MLFLOW_TRACKING_URI=file:./mlruns \
+          # Gunakan absolute local tracking agar model & runs tersimpan di folder yang sama
+          MLFLOW_TRACKING_URI="file://${{ github.workspace }}/mlruns" \
           mlflow run MLProject \
             -P n_estimators=$N_EST \
             -P max_depth=$MAX_D \
@@ -135,17 +135,26 @@ jobs:
               print("No experiments found locally.")
               exit(0)
 
-          # Ambil run terbaru
+          # Ambil semua run terurut waktu terbaru
           runs = local_client.search_runs(
               [e.experiment_id for e in experiments],
-              order_by=["start_time DESC"],
-              max_results=1
+              order_by=["start_time DESC"]
           )
           if not runs:
               print("No runs found locally.")
               exit(0)
 
-          latest_run = runs[0]
+          # Cari run pertama yang memiliki metrik evaluasi
+          latest_run = None
+          for r in runs:
+              if "f1_score" in r.data.metrics or "accuracy" in r.data.metrics:
+                  latest_run = r
+                  break
+
+          if latest_run is None:
+              # Fallback ke run terbaru biasa
+              latest_run = runs[0]
+
           params  = latest_run.data.params
           metrics = latest_run.data.metrics
           run_name = latest_run.info.run_name
@@ -171,6 +180,7 @@ jobs:
         with:
           name: mlflow-training-artifacts
           path: |
+            mlruns/
             MLProject/mlruns/
             MLProject/artifacts/
           retention-days: 30
@@ -239,7 +249,7 @@ jobs:
           zip_path = f"/tmp/mlflow_artifacts_run_{run_number}.zip"
           added = 0
           with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-              for folder in ["MLProject/artifacts", "MLProject/mlruns"]:
+              for folder in ["MLProject/artifacts", "mlruns", "MLProject/mlruns"]:
                   if os.path.isdir(folder):
                       for root, dirs, files in os.walk(folder):
                           for file in files:
