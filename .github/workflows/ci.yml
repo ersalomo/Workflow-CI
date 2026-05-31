@@ -111,7 +111,7 @@ jobs:
           echo "Installing additional Python dependencies..."
           pip install google-auth google-api-python-client 2>/dev/null || true
 
-      - name: Upload to GitHub
+      - name: Upload to GitHub LFS
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MLFLOW_TRACKING_URI: "https://dagshub.com/ersalomo/Membangun-Sistem-Machine-Learning.mlflow"
@@ -155,10 +155,16 @@ jobs:
           EOF
           fi
 
-          # 2. Commit artifacts to GitHub Repository
+          # 2. Commit artifacts to GitHub Repository using LFS
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}
+
+          # Inisialisasi Git LFS
+          git lfs install
+
+          # Track model artifacts folder using Git LFS
+          git lfs track "MLProject/model_artifacts/**" || true
 
           mkdir -p MLProject/model_artifacts
           if [ -d "MLProject/artifacts" ]; then
@@ -171,9 +177,12 @@ jobs:
             cp "$MODEL_DIR"/../*.png MLProject/model_artifacts/ 2>/dev/null || true
           fi
 
+          # Add .gitattributes and LFS model artifacts
+          git add .gitattributes || true
           git add MLProject/model_artifacts/ || true
+
           if ! git diff --cached --quiet; then
-            git commit -m "ci: update trained model artifacts [skip ci]"
+            git commit -m "ci: update trained model artifacts using Git LFS [skip ci]"
             git push
           else
             echo "No artifact changes to commit."
