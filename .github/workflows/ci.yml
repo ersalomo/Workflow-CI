@@ -180,8 +180,13 @@ jobs:
           fi
 
       - name: Build Docker Model
-        if: github.ref == 'refs/heads/main' && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != ''
+        if: github.ref == 'refs/heads/main'
         run: |
+          if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ] || [ -z "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+            echo "DockerHub credentials not configured. Skipping step."
+            exit 0
+          fi
+
           MLMODEL_FILE=$(find "${{ github.workspace }}/mlruns" -name "MLmodel" 2>/dev/null | head -1)
           if [ -z "$MLMODEL_FILE" ]; then
             MLMODEL_FILE=$(find . -path "*/mlruns/*/artifacts/model/MLmodel" -not -path "*/tmp/*" 2>/dev/null | head -1)
@@ -205,18 +210,30 @@ jobs:
           fi
 
       - name: Log in to Docker Hub
-        if: github.ref == 'refs/heads/main' && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != ''
+        if: github.ref == 'refs/heads/main'
         run: |
+          if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ] || [ -z "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+            echo "DockerHub credentials not configured. Skipping step."
+            exit 0
+          fi
           echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
       - name: Tag Docker Image
-        if: github.ref == 'refs/heads/main' && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != ''
+        if: github.ref == 'refs/heads/main'
         run: |
+          if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ] || [ -z "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+            echo "DockerHub credentials not configured. Skipping step."
+            exit 0
+          fi
           docker tag "${{ secrets.DOCKERHUB_USERNAME }}/wine-quality-mlproject:latest" "${{ secrets.DOCKERHUB_USERNAME }}/wine-quality-mlproject:${{ github.run_number }}"
           echo "Tagged image with run number: ${{ github.run_number }}"
 
       - name: Push Docker Image
-        if: github.ref == 'refs/heads/main' && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != ''
+        if: github.ref == 'refs/heads/main'
         run: |
+          if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ] || [ -z "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+            echo "DockerHub credentials not configured. Skipping step."
+            exit 0
+          fi
           docker push "${{ secrets.DOCKERHUB_USERNAME }}/wine-quality-mlproject:latest"
           docker push "${{ secrets.DOCKERHUB_USERNAME }}/wine-quality-mlproject:${{ github.run_number }}"
