@@ -111,7 +111,7 @@ jobs:
           echo "Installing additional Python dependencies..."
           pip install google-auth google-api-python-client 2>/dev/null || true
 
-      - name: Upload to GitHub LFS
+      - name: Upload to GitHub
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MLFLOW_TRACKING_URI: "https://dagshub.com/ersalomo/Membangun-Sistem-Machine-Learning.mlflow"
