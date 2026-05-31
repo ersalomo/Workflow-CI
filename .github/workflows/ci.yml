@@ -23,7 +23,7 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout repository
+      - name: Run actions/checkout@v3
         uses: actions/checkout@v4
 
       - name: Set up Python 3.12.7
@@ -31,27 +31,28 @@ jobs:
         with:
           python-version: "3.12.7"
 
-      - name: Cache pip dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('MLProject/conda.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
+      - name: Check Env
+        run: |
+          echo "=== Python & OS Version ==="
+          python --version
+          pip --version
+          uname -a
+          echo "=== Directory Structure ==="
+          ls -la
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install mlflow==2.19.0 scikit-learn pandas numpy matplotlib joblib
-
-      - name: Patch MLflow library for Python 3.9 get-pip compatibility
-        run: |
+          
+          # Patch MLflow library for Python 3.9 get-pip compatibility
           PYTHON_DOCKER_UTILS=$(python3 -c "import mlflow.models.docker_utils as d; print(d.__file__)")
           echo "Patching MLflow library file at: $PYTHON_DOCKER_UTILS"
           sed -i 's|https://bootstrap.pypa.io/get-pip.py|https://bootstrap.pypa.io/pip/3.9/get-pip.py|g' "$PYTHON_DOCKER_UTILS"
 
-      - name: Validate preprocessed dataset exists
+      - name: Run mlflow project
         run: |
+          # Validate preprocessed dataset exists
           mkdir -p MLProject/namadataset_preprocessing
           if [ ! -f "MLProject/namadataset_preprocessing/wine_preprocessed.csv" ] && [ -f "MLProject/wine_preprocessed.csv" ]; then
             cp MLProject/wine_preprocessed.csv MLProject/namadataset_preprocessing/wine_preprocessed.csv
@@ -59,21 +60,15 @@ jobs:
           
           if [ ! -f "MLProject/namadataset_preprocessing/wine_preprocessed.csv" ]; then
             echo "wine_preprocessed.csv not found! Generating from raw data..."
-            pip install scikit-learn pandas numpy
             python -c "
             import pandas as pd
             import os
             raw_path = 'wine_quality_raw.csv' if os.path.exists('wine_quality_raw.csv') else '../wine_quality_raw.csv'
             df = pd.read_csv(raw_path)
             df.to_csv('MLProject/namadataset_preprocessing/wine_preprocessed.csv', index=False)
-            print('Generated wine_preprocessed.csv inside namadataset_preprocessing')
             "
-          else
-            echo "wine_preprocessed.csv found ($(wc -l < MLProject/namadataset_preprocessing/wine_preprocessed.csv) rows)"
           fi
 
-      - name: Run MLflow Project (re-train, lokal)
-        run: |
           N_EST="${{ github.event.inputs.n_estimators || '120' }}"
           MAX_D="${{ github.event.inputs.max_depth || '6' }}"
           echo "Training with n_estimators=$N_EST, max_depth=$MAX_D"
@@ -89,146 +84,88 @@ jobs:
           echo "--- MLmodel files found ---"
           find . -path "*/mlruns/*/artifacts/model/MLmodel" -not -path "*/tmp/*" 2>/dev/null || echo "none"
 
-      - name: Build and Push Docker Image using MLflow
-        if: github.ref == 'refs/heads/main'
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Get latest MLflow run_id
+        id: get_run_id
         run: |
-          if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
-            echo "DockerHub secrets not set, skipping build and push."
-            exit 0
-          fi
-          echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+          RUN_ID=$(python -c "
+          import mlflow
+          client = mlflow.tracking.MlflowClient(tracking_uri='file:./mlruns')
+          experiments = client.search_experiments()
+          all_runs = []
+          for exp in experiments:
+              runs = client.search_runs(exp.experiment_id, order_by=['start_time DESC'])
+              if runs:
+                  all_runs.extend(runs)
+          if all_runs:
+              all_runs.sort(key=lambda r: r.info.start_time, reverse=True)
+              print(all_runs[0].info.run_id)
+          else:
+              print('')
+          ")
+          echo "RUN_ID=$RUN_ID" >> $GITHUB_ENV
+          echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+          echo "Latest MLflow Run ID: $RUN_ID"
 
-          # Cari MLmodel file dari local mlruns hasil re-train terbaru
-          MLMODEL_FILE=$(find "${{ github.workspace }}/mlruns" -name "MLmodel" 2>/dev/null | head -1)
-          if [ -z "$MLMODEL_FILE" ]; then
-            # Fallback ke pencarian umum jika tidak ditemukan di root
-            MLMODEL_FILE=$(find . -path "*/mlruns/*/artifacts/model/MLmodel" -not -path "*/tmp/*" 2>/dev/null | head -1)
-          fi
+      - name: Install Python dependencies
+        run: |
+          echo "Installing additional Python dependencies..."
+          pip install google-auth google-api-python-client 2>/dev/null || true
 
-          echo "Found MLmodel at: $MLMODEL_FILE"
-
-          if [ -n "$MLMODEL_FILE" ]; then
-            MODEL_PATH=$(dirname "$MLMODEL_FILE")
-            echo "Model path: $MODEL_PATH"
-
-            # Patch Python version to 3.12.7 to prevent EOL failure and match user requirements
-            if [ -f "$MODEL_PATH/MLmodel" ]; then
-              sed -i 's/python_version: 3\.[0-9.]*/python_version: 3.12.7/g' "$MODEL_PATH/MLmodel"
-              echo "  Patched MLmodel"
-            fi
-            if [ -f "$MODEL_PATH/python_env.yaml" ]; then
-              sed -i 's/python: 3\.[0-9.]*/python: 3.12.7/g' "$MODEL_PATH/python_env.yaml"
-              echo "  Patched python_env.yaml"
-            fi
-            if [ -f "$MODEL_PATH/conda.yaml" ]; then
-              sed -i 's/python=3\.[0-9.]*/python=3.12.7/g' "$MODEL_PATH/conda.yaml"
-              echo "  Patched conda.yaml"
-            fi
-
-            mlflow models build-docker \
-              -m "$MODEL_PATH" \
-              -n "$DOCKERHUB_USERNAME/wine-quality-mlproject:latest"
-            docker push "$DOCKERHUB_USERNAME/wine-quality-mlproject:latest"
-            echo "Docker image pushed: $DOCKERHUB_USERNAME/wine-quality-mlproject:latest"
-          else
-            echo "No MLflow model found locally, skipping Docker build."
-          fi
-
-      - name: Log run metrics to DagsHub
+      - name: Upload to Google Drive
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MLFLOW_TRACKING_URI: "https://dagshub.com/ersalomo/Membangun-Sistem-Machine-Learning.mlflow"
           MLFLOW_TRACKING_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
           MLFLOW_TRACKING_PASSWORD: ${{ secrets.DAGSHUB_TOKEN }}
         run: |
-          if [ -z "${{ secrets.DAGSHUB_USERNAME }}" ]; then
-            echo "DagsHub secrets not set, skipping."
-            exit 0
+          # 1. Sync metrics to DagsHub if credentials are available
+          if [ -n "$MLFLOW_TRACKING_USERNAME" ]; then
+            echo "Syncing metrics to DagsHub..."
+            python - <<'EOF'
+            import mlflow, os
+            try:
+                local_client = mlflow.tracking.MlflowClient(tracking_uri="file:./mlruns")
+                experiments  = local_client.search_experiments()
+                if experiments:
+                    runs = local_client.search_runs([e.experiment_id for e in experiments], order_by=["start_time DESC"])
+                    latest_run = None
+                    for r in runs:
+                        if "f1_score" in r.data.metrics or "accuracy" in r.data.metrics:
+                            latest_run = r
+                            break
+                    if latest_run is None and runs:
+                        latest_run = runs[0]
+                    
+                    if latest_run:
+                        params  = latest_run.data.params
+                        metrics = latest_run.data.metrics
+                        run_name = latest_run.info.run_name
+                        
+                        mlflow.set_experiment("Wine_Quality_CI_Experiment")
+                        with mlflow.start_run(run_name=f"CI_{run_name}"):
+                            for k, v in params.items():
+                                mlflow.log_param(k, v)
+                            for k, v in metrics.items():
+                                mlflow.log_metric(k, v)
+                            mlflow.log_param("ci_run_number", os.environ.get("GITHUB_RUN_NUMBER", "0"))
+                            mlflow.log_param("ci_triggered_by", "github-actions")
+                        print("Run synced to DagsHub successfully!")
+            except Exception as e:
+                print(f"DagsHub sync error: {e}")
+          EOF
           fi
 
-          python - <<'EOF'
-          import mlflow, os
-
-          # Baca metrik dari local run
-          local_client = mlflow.tracking.MlflowClient(tracking_uri="file:./mlruns")
-          experiments  = local_client.search_experiments()
-
-          if not experiments:
-              print("No experiments found locally.")
-              exit(0)
-
-          # Ambil semua run terurut waktu terbaru
-          runs = local_client.search_runs(
-              [e.experiment_id for e in experiments],
-              order_by=["start_time DESC"]
-          )
-          if not runs:
-              print("No runs found locally.")
-              exit(0)
-
-          # Cari run pertama yang memiliki metrik evaluasi
-          latest_run = None
-          for r in runs:
-              if "f1_score" in r.data.metrics or "accuracy" in r.data.metrics:
-                  latest_run = r
-                  break
-
-          if latest_run is None:
-              # Fallback ke run terbaru biasa
-              latest_run = runs[0]
-
-          params  = latest_run.data.params
-          metrics = latest_run.data.metrics
-          run_name = latest_run.info.run_name
-
-          print(f"Syncing run '{run_name}' to DagsHub: params={params}, metrics={metrics}")
-
-          # Log ulang ke DagsHub
-          mlflow.set_experiment("Wine_Quality_CI_Experiment")
-          with mlflow.start_run(run_name=f"CI_{run_name}"):
-              for k, v in params.items():
-                  mlflow.log_param(k, v)
-              for k, v in metrics.items():
-                  mlflow.log_metric(k, v)
-              mlflow.log_param("ci_run_number", os.environ.get("GITHUB_RUN_NUMBER", "0"))
-              mlflow.log_param("ci_triggered_by", "github-actions")
-          print("Run synced to DagsHub successfully!")
-          EOF
-
-
-      - name: Upload MLflow artifacts (GitHub Actions)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: mlflow-training-artifacts
-          path: |
-            mlruns/
-            MLProject/mlruns/
-            MLProject/artifacts/
-          retention-days: 30
-
-      - name: Commit trained model artifacts to repository
-        if: always()
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
+          # 2. Commit artifacts to GitHub Repository
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # Gunakan GITHUB_TOKEN agar push diizinkan
           git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}
 
-          # Copy artifacts to a tracked folder
           mkdir -p MLProject/model_artifacts
           if [ -d "MLProject/artifacts" ]; then
             cp -r MLProject/artifacts/. MLProject/model_artifacts/ 2>/dev/null || true
           fi
 
-          # Copy latest model plots if exists
-          MLMODEL_FILE=$(find . -path "*/mlruns/*/artifacts/model/MLmodel" \
-            -not -path "*/tmp/*" 2>/dev/null | head -1)
+          MLMODEL_FILE=$(find . -path "*/mlruns/*/artifacts/model/MLmodel" -not -path "*/tmp/*" 2>/dev/null | head -1)
           if [ -n "$MLMODEL_FILE" ]; then
             MODEL_DIR=$(dirname "$MLMODEL_FILE")
             cp "$MODEL_DIR"/../*.png MLProject/model_artifacts/ 2>/dev/null || true
@@ -242,65 +179,44 @@ jobs:
             echo "No artifact changes to commit."
           fi
 
-      - name: Upload artifacts to Google Shared Drive
-        if: false  # TODO: aktifkan setelah Shared Drive dikonfigurasi
-        env:
-          GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
-          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+      - name: Build Docker Model
+        if: github.ref == 'refs/heads/main' && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != ''
         run: |
-          if [ -z "$GDRIVE_CREDENTIALS" ] || [ -z "$GDRIVE_FOLDER_ID" ]; then
-            echo "Google Drive secrets not set, skipping upload."
-            exit 0
+          MLMODEL_FILE=$(find "${{ github.workspace }}/mlruns" -name "MLmodel" 2>/dev/null | head -1)
+          if [ -z "$MLMODEL_FILE" ]; then
+            MLMODEL_FILE=$(find . -path "*/mlruns/*/artifacts/model/MLmodel" -not -path "*/tmp/*" 2>/dev/null | head -1)
           fi
 
-          pip install google-auth google-api-python-client 2>/dev/null
+          if [ -n "$MLMODEL_FILE" ]; then
+            MODEL_PATH=$(dirname "$MLMODEL_FILE")
+            echo "Model path: $MODEL_PATH"
 
-          python - <<'EOF'
-          import os, json, zipfile
-          from googleapiclient.discovery import build
-          from googleapiclient.http import MediaFileUpload
-          from google.oauth2 import service_account
+            # Patch Python version to 3.12.7
+            sed -i 's/python_version: 3\.[0-9.]*/python_version: 3.12.7/g' "$MODEL_PATH/MLmodel" || true
+            sed -i 's/python: 3\.[0-9.]*/python: 3.12.7/g' "$MODEL_PATH/python_env.yaml" || true
+            sed -i 's/python=3\.[0-9.]*/python=3.12.7/g' "$MODEL_PATH/conda.yaml" || true
 
-          # Load credentials
-          creds_json  = json.loads(os.environ["GDRIVE_CREDENTIALS"])
-          folder_id   = os.environ["GDRIVE_FOLDER_ID"]
-          run_number  = os.environ.get("GITHUB_RUN_NUMBER", "0")
+            mlflow models build-docker \
+              -m "$MODEL_PATH" \
+              -n "${{ secrets.DOCKERHUB_USERNAME }}/wine-quality-mlproject:latest"
+          else
+            echo "No model found to build Docker image."
+            exit 1
+          fi
 
-          creds = service_account.Credentials.from_service_account_info(
-              creds_json,
-              scopes=["https://www.googleapis.com/auth/drive"]
-          )
-          service = build("drive", "v3", credentials=creds)
+      - name: Log in to Docker Hub
+        if: github.ref == 'refs/heads/main' && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != ''
+        run: |
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
-          # Zip artifacts
-          zip_path = f"/tmp/mlflow_artifacts_run_{run_number}.zip"
-          added = 0
-          with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-              for folder in ["MLProject/artifacts", "mlruns", "MLProject/mlruns"]:
-                  if os.path.isdir(folder):
-                      for root, dirs, files in os.walk(folder):
-                          for file in files:
-                              fp = os.path.join(root, file)
-                              zf.write(fp, os.path.relpath(fp, "MLProject"))
-                              added += 1
+      - name: Tag Docker Image
+        if: github.ref == 'refs/heads/main' && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != ''
+        run: |
+          docker tag "${{ secrets.DOCKERHUB_USERNAME }}/wine-quality-mlproject:latest" "${{ secrets.DOCKERHUB_USERNAME }}/wine-quality-mlproject:${{ github.run_number }}"
+          echo "Tagged image with run number: ${{ github.run_number }}"
 
-          if added == 0:
-              print("No artifact files found, skipping upload.")
-              exit(0)
-
-          print(f"Zipped {added} files -> {zip_path}")
-
-          # Upload ke Shared Drive (wajib pakai supportsAllDrives=True)
-          file_name     = f"mlflow_artifacts_run_{run_number}.zip"
-          media         = MediaFileUpload(zip_path, mimetype="application/zip", resumable=True)
-          file_metadata = {"name": file_name, "parents": [folder_id]}
-
-          uploaded = service.files().create(
-              body=file_metadata,
-              media_body=media,
-              fields="id, name",
-              supportsAllDrives=True   # <-- wajib untuk Shared Drive
-          ).execute()
-
-          print(f"Uploaded to Shared Drive: {file_name} (id={uploaded.get('id')})")
-          EOF
+      - name: Push Docker Image
+        if: github.ref == 'refs/heads/main' && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != ''
+        run: |
+          docker push "${{ secrets.DOCKERHUB_USERNAME }}/wine-quality-mlproject:latest"
+          docker push "${{ secrets.DOCKERHUB_USERNAME }}/wine-quality-mlproject:${{ github.run_number }}"
