@@ -121,7 +121,7 @@ jobs:
           # 1. Sync metrics to DagsHub if credentials are available
           if [ -n "$MLFLOW_TRACKING_USERNAME" ]; then
             echo "Syncing metrics to DagsHub..."
-            python - <<'EOF'
+            cat <<'EOF' | cut -c 13- | python -
             import mlflow, os
             try:
                 local_client = mlflow.tracking.MlflowClient(tracking_uri="file:./mlruns")
@@ -152,7 +152,7 @@ jobs:
                         print("Run synced to DagsHub successfully!")
             except Exception as e:
                 print(f"DagsHub sync error: {e}")
-          EOF
+            EOF
           fi
 
           # 2. Commit artifacts to GitHub Repository using LFS
